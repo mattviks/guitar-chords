@@ -3,7 +3,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { url } = req.body;
+  const { url, debug } = req.body;
 
   if (!url || !url.includes('ultimate-guitar.com')) {
     return res.status(400).json({ error: 'Please provide a valid Ultimate Guitar URL.' });
@@ -25,28 +25,79 @@ export default async function handler(req, res) {
 
     const html = await response.text();
 
-    // Extract the embedded JSON from window.UGAPP.store.page
-    const match = html.match(/window\.UGAPP\.store\.page\s*=\s*(\{.+?\});\s*<\/script>/s);
+    // DEBUG MODE: return a snippet of raw HTML so we can inspect the structure
+    if (debug) {
+      // Find any script tags containing likely data blobs
+      const scriptMatches = [...html.matchAll(/<script[^>]*>([\s\S]{0,300})<\/script>/gi)]
+        .map(m => m[1].trim())
+        .filter(s => s.length > 20)
+        .slice(0, 10);
 
-    if (!match || !match[1]) {
-      return res.status(422).json({ error: 'Could not find tab data on this page. Make sure it\'s a tab or chords page (not a search or artist page).' });
+      return res.status(200).json({
+        debug: true,
+        htmlLength: html.length,
+        htmlSnippet: html.substring(0, 2000),
+        scriptSnippets: scriptMatches,
+        // Try all likely patterns and report which one matches
+        patternResults: {
+          UGAPP_store_page: !!html.match(/window\.UGAPP\.store\.page\s*=/),
+          UGAPP_store: !!html.match(/window\.UGAPP\.store\s*=/),
+          js_store: !!html.match(/class="js-store"/),
+          data_content: !!html.match(/data-content="/),
+          initialState: !!html.match(/window\.__INITIAL_STATE__\s*=/),
+          reactProps: !!html.match(/data-react-props/),
+        }
+      });
     }
 
-    let pageData;
-    try {
-      pageData = JSON.parse(match[1]);
-    } catch (e) {
-      return res.status(422).json({ error: 'Found tab data but failed to parse it. The page structure may have changed.' });
+    // Try multiple known patterns UG has used over the years
+    let pageData = null;
+
+    // Pattern 1: window.UGAPP.store.page = {...}  (classic)
+    const match1 = html.match(/window\.UGAPP\.store\.page\s*=\s*(\{.+?\});\s*<\/script>/s);
+    if (match1) {
+      try { pageData = JSON.parse(match1[1]); } catch {}
     }
 
-    const tabData = pageData?.data?.tab_view?.wiki_tab?.content;
-    const tabMeta = pageData?.data?.tab;
+    // Pattern 2: data-content="..." on a .js-store element
+    if (!pageData) {
+      const match2 = html.match(/class="js-store"[^>]*data-content="([^"]+)"/);
+      if (match2) {
+        try { pageData = JSON.parse(match2[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&')); } catch {}
+      }
+    }
+
+    // Pattern 3: window.__INITIAL_STATE__ = {...}
+    if (!pageData) {
+      const match3 = html.match(/window\.__INITIAL_STATE__\s*=\s*(\{.+?\});\s*(?:<\/script>|window\.)/s);
+      if (match3) {
+        try { pageData = JSON.parse(match3[1]); } catch {}
+      }
+    }
+
+    if (!pageData) {
+      return res.status(422).json({
+        error: 'Could not find tab data on this page. The page structure may have changed — enable debug mode to inspect.',
+      });
+    }
+
+    // Try multiple known paths to the tab content
+    const tabData =
+      pageData?.data?.tab_view?.wiki_tab?.content ||      // classic path
+      pageData?.store?.page?.data?.tab_view?.wiki_tab?.content || // wrapped store
+      pageData?.tab_view?.wiki_tab?.content;              // flat path
+
+    const tabMeta =
+      pageData?.data?.tab ||
+      pageData?.store?.page?.data?.tab ||
+      pageData?.tab;
 
     if (!tabData) {
-      return res.status(422).json({ error: 'Tab content not found in page data. This URL might be a premium/pro tab.' });
+      return res.status(422).json({
+        error: 'Tab content not found in page data. This URL might be a premium/pro tab, or the data path has changed.',
+      });
     }
 
-    // Clean up UG-specific formatting tags
     const cleanedTab = tabData
       .replace(/\[ch\](.*?)\[\/ch\]/g, '$1')
       .replace(/\[tab\]([\s\S]*?)\[\/tab\]/g, '$1')
