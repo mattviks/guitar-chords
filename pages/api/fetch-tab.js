@@ -9,28 +9,18 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Please provide a valid Ultimate Guitar URL.' });
   }
 
+  const apiKey = process.env.SCRAPER_API_KEY;
+  if (!apiKey) {
+    return res.status(500).json({ error: 'Server misconfiguration: missing SCRAPER_API_KEY.' });
+  }
+
+  const scraperUrl = `http://api.scraperapi.com?api_key=${apiKey}&url=${encodeURIComponent(url)}&render=false`;
+
   try {
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Referer': 'https://www.google.com/',
-        'sec-ch-ua': '"Google Chrome";v="149", "Chromium";v="149", "Not?A_Brand";v="99"',
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'cross-site',
-        'Sec-Fetch-User': '?1',
-        'Upgrade-Insecure-Requests': '1',
-        'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache',
-      },
-    });
+    const response = await fetch(scraperUrl);
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch page: HTTP ${response.status}`);
+      throw new Error(`ScraperAPI returned HTTP ${response.status}`);
     }
 
     const html = await response.text();
@@ -58,8 +48,8 @@ export default async function handler(req, res) {
 
     // Clean up UG-specific formatting tags
     const cleanedTab = tabData
-      .replace(/\[ch\](.*?)\[\/ch\]/g, '$1')       // [ch]C[/ch] -> C
-      .replace(/\[tab\]([\s\S]*?)\[\/tab\]/g, '$1') // [tab]...[/tab] -> ...
+      .replace(/\[ch\](.*?)\[\/ch\]/g, '$1')
+      .replace(/\[tab\]([\s\S]*?)\[\/tab\]/g, '$1')
       .replace(/\[verse\]([\s\S]*?)\[\/verse\]/g, '$1')
       .replace(/\[chorus\]([\s\S]*?)\[\/chorus\]/g, '$1')
       .replace(/\[bridge\]([\s\S]*?)\[\/bridge\]/g, '$1')
@@ -67,7 +57,7 @@ export default async function handler(req, res) {
       .replace(/\[outro\]([\s\S]*?)\[\/outro\]/g, '$1')
       .replace(/\[pre-chorus\]([\s\S]*?)\[\/pre-chorus\]/g, '$1')
       .replace(/\[interlude\]([\s\S]*?)\[\/interlude\]/g, '$1')
-      .replace(/\[\/?[a-z_-]+\]/gi, '')              // strip any other unknown UG tags
+      .replace(/\[\/?[a-z_-]+\]/gi, '')
       .trim();
 
     return res.status(200).json({
